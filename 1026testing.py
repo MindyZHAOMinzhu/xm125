@@ -5,11 +5,29 @@
 from acconeer.exptool import a121
 
 
+from __future__ import annotations
+import npyfile
+import numpy as np
+import time
+import csv
+import acconeer.exptool as et
+from acconeer.exptool.a121 import Profile
+from acconeer.exptool.a121.algo.breathing import RefApp
+from acconeer.exptool.a121.algo.breathing._ref_app import (
+    BreathingProcessorConfig,
+    RefAppConfig,
+    get_sensor_config,
+)
+from acconeer.exptool.a121.algo.presence import ProcessorConfig as PresenceProcessorConfig
+
+
+
 # --- 1️⃣ 打开连接 ---
 #   如果 XM125 刷的是 "exploration server" 固件，
 #   可以直接通过 serial_port=/dev/ttyUSB0 连接。
 client = a121.Client.open(
     serial_port="/dev/ttyUSB0",
+    # usb_device=True,
     # baudrate=115200,
     # protocol="exploration",
     # flow_control=False,
