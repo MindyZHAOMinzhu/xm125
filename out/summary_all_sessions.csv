@@ -1,0 +1,2 @@
+session_id,session_dir,human_enter_rel_sec,radar_first_valid_unix,belt_first_valid_unix,cold_start_radar_sec_since_enter,cold_start_belt_sec_since_enter,radar_first_stable_unix,radar_first_stable_sec_since_enter,stable_start_unix,MAE,RMSE,CORR
+20251211_172247,session_20251211_172247,55.0,1765495392,1765495368,-30.0,-54.0,1765495394,-28,1765495394,,,0.13882180651050277

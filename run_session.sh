@@ -52,12 +52,12 @@ echo "📌 Logged human enter time: $HUMAN_ENTER_UNIX"
 echo
 
 ######################################
-# 4) Check belt availability   ⭐⭐ 只改这里 ⭐⭐
+# 4) Check belt availability  
 ######################################
-# 给 belt 一点时间跑它自己的逻辑（包括“没数据就退出”的判断）
+echo "Checking belt status..."
 sleep 10
 
-# 如果 belt 进程已经结束，就检查它的退出码
+# If belt process has already exited, check its exit code
 if ! kill -0 "$BELT_PID" 2>/dev/null; then
     echo "⚠️ Belt process has exited, checking exit code..."
     wait "$BELT_PID"
