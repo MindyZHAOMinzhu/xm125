@@ -34,20 +34,19 @@ def find_session_files(session_dir):
 
 
 def load_radar(radar_csv, presence_dist_range=(0.4, 0.7)):
-    """读取 radar csv，并提取几个关键时间点"""
+   
     df = pd.read_csv(radar_csv)
 
     # 转数值
     df["Breath_Rate_BPM"] = pd.to_numeric(df["Breath_Rate_BPM"], errors="coerce")
     df["Timestamp"] = pd.to_numeric(df["Timestamp"], errors="coerce")
 
-    # presence 距离
+    # presence 
     if "Presence_Distance_m" in df.columns:
         df["Presence_Distance_m"] = pd.to_numeric(
             df["Presence_Distance_m"], errors="coerce"
         )
 
-    # 第一次 presence (in range)
     t_presence = None
     if "Presence_Detected" in df.columns and "Presence_Distance_m" in df.columns:
         mask_pres = (
@@ -58,7 +57,6 @@ def load_radar(radar_csv, presence_dist_range=(0.4, 0.7)):
         if mask_pres.any():
             t_presence = df.loc[mask_pres, "Timestamp"].min()
 
-    # 第一次有有效呼吸率
     mask_breath = (df["Quality_Flag"] == "breathing") & df["Breath_Rate_BPM"].notna()
     t_first_breath = df.loc[mask_breath, "Timestamp"].min() if mask_breath.any() else None
 
@@ -66,7 +64,7 @@ def load_radar(radar_csv, presence_dist_range=(0.4, 0.7)):
 
 
 def load_belt(belt_csv):
-    """读取 belt csv，并返回 DataFrame + 第一次有有效 BPM 的时间"""
+
     df = pd.read_csv(belt_csv)
     df["Timestamp"] = pd.to_numeric(df["Timestamp"], errors="coerce")
     df["Belt_Breath_Rate_BPM"] = pd.to_numeric(
@@ -80,11 +78,7 @@ def load_belt(belt_csv):
 
 
 def merge_radar_belt(radar_df, belt_df, belt_shift_s=0.0, tolerance_s=0.5):
-    """
-    用 Timestamp 做 asof merge，
-    belt_shift_s: 如果你觉得 belt 整体晚/早了几秒，可以用这个参数修正。
-    """
-    # 调整 belt 时间轴
+  
     belt_df = belt_df.copy()
     belt_df["Timestamp_shifted"] = belt_df["Timestamp"] + belt_shift_s
 
@@ -119,7 +113,7 @@ def compute_feasibility_metrics(
     else:
         metrics["radar_cold_start_from_presence"] = None
 
-    # 计算 radar vs belt 误差（只在两边都有有效值时）
+   
     valid_mask = (
         merged["Breath_Rate_BPM"].notna()
         & merged["Belt_Breath_Rate_BPM"].notna()
@@ -146,7 +140,7 @@ def compute_feasibility_metrics(
 
 
 def plot_bpm(merged, session_dir, show=True):
-    """画一张简单的雷达 vs belt 呼吸率曲线图"""
+    
     plt.figure(figsize=(10, 5))
     plt.plot(
         merged["Timestamp"],

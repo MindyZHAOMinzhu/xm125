@@ -21,10 +21,6 @@ from acconeer.exptool.a121.algo.breathing._ref_app import (
 from acconeer.exptool.a121.algo.presence import ProcessorConfig as PresenceProcessorConfig
 
 
-
-# --- 1️⃣ 打开连接 ---
-#   如果 XM125 刷的是 "exploration server" 固件，
-#   可以直接通过 serial_port=/dev/ttyUSB0 连接。
 client = a121.Client.open(
     serial_port="/dev/ttyUSB0",
     # usb_device=True,
@@ -38,7 +34,6 @@ print("Server Info:")
 print(client.server_info)
 
 
-# --- 2️⃣ 配置传感器 ---
 sensor_config = a121.SensorConfig()
 sensor_config.num_points = 6           # 测量点数量
 sensor_config.sweeps_per_frame = 4     # 每帧的扫描数
@@ -48,7 +43,6 @@ client.setup_session(sensor_config)
 print("✅ Session setup done")
 
 
-# --- 3️⃣ 开始采样 ---
 client.start_session()
 
 N = 5  # 采 5 帧
