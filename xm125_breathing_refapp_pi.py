@@ -26,7 +26,7 @@ ENTER_DISTANCE_MAX = 0.7
 
 
 def main():
-    # Enhanced argument parser: add a prefix option on top of the official ExampleArgumentParser
+
     parser = a121.ExampleArgumentParser()
     parser.add_argument(
         "--prefix",
@@ -37,7 +37,7 @@ def main():
     args = parser.parse_args()
     et.utils.config_logging(args)
 
-    # ---------- 0) 读 session_start_unix ----------
+    # ---------- 0) read session_start_unix ----------
     session_start_path = Path("session_start_unix.txt")
     if session_start_path.exists():
         session_start_unix = float(session_start_path.read_text().strip())
@@ -52,7 +52,7 @@ def main():
     
     # ---------- 1) Breathing processor config ----------
     breathing_processor_config = BreathingProcessorConfig(
-        lowest_breathing_rate=8,      # 6 bpm (~10 seconds per breath)
+        lowest_breathing_rate=6,      # 6 bpm (~10 seconds per breath)
         highest_breathing_rate=30,    # 30 bpm (~2 seconds per breath)
         time_series_length_s=15,      # Directly related to cold start, can compare experiments later
     )

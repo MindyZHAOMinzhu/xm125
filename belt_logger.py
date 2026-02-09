@@ -15,6 +15,7 @@ def record_belt_breathing_rate(
 ):
 
     session_start_path = Path("session_start_unix.txt")
+    
     if session_start_path.exists():
         session_start_unix = float(session_start_path.read_text().strip())
         print(f"Using session_start_unix from file: {session_start_unix}")
@@ -26,12 +27,12 @@ def record_belt_breathing_rate(
     print("Opening GDX-RB...")
 
     try:
-        # USB 连接（你的设备是 GDX-RB）
-        g.open(connection="usb")  # 或 g.open_usb()，看 gdx 版本
+        g.open(connection="usb")  
         print("GDX-RB opened successfully.")
     except Exception as e:
         print(f"Error opening GDX: {e}")
-        # ⭐ 打开失败 → 直接返回非 0，供 shell 检测
+        
+        # ⭐ If fials to open, fall back
         return 1
 
     g.select_sensors([2])  # 1-Force; 2-respiratory rate - bpm
@@ -55,7 +56,7 @@ def record_belt_breathing_rate(
                 "Unix_Time",              # 绝对 unix 秒（浮点）
                 "Time_HMS",               # HH:MM:SS
                 "Belt_Breath_Rate_BPM",   # 呼吸率
-                "Is_New_Value",           # 是否和上一帧 bpm 不同
+                # "Is_New_Value",           
             ]
         )
 
@@ -77,7 +78,7 @@ def record_belt_breathing_rate(
                 if data is not None:
                     got_any_data = True          # ⭐ 至少读到过一次数据
                     bpm = data[0]
-                    is_new = bpm != last_bpm
+                    # is_new = bpm != last_bpm
                     last_bpm = bpm
 
                     writer.writerow(
@@ -86,7 +87,7 @@ def record_belt_breathing_rate(
                             now_unix,               # Unix_Time（保留浮点）
                             human_time,             # Time_HMS
                             f"{bpm:.2f}",           # Belt_Breath_Rate_BPM
-                            is_new,                 # Is_New_Value
+                            # is_new,                 # Is_New_Value
                         ]
                     )
                     f.flush()

@@ -15,6 +15,7 @@ SESSION_DIR="session_${SESSION_ID}"
 mkdir -p "$SESSION_DIR"
 cd "$SESSION_DIR"
 
+# 0) Record Session start unix
 SESSION_START_UNIX=$(date +%s)
 echo "$SESSION_START_UNIX" > session_start_unix.txt
 echo "📁 Session folder created: $SESSION_DIR"
