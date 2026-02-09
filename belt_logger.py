@@ -3,7 +3,7 @@ import csv
 import argparse
 from datetime import datetime
 from pathlib import Path
-import sys          # ⭐ 新增：为了返回退出码给 shell
+import sys      
 
 from gdx import gdx
 
@@ -13,7 +13,7 @@ def record_belt_breathing_rate(
     duration_s=300,
     sample_interval_s=1,
 ):
-    # 先尝试读取 session_start_unix.txt（和 run_session.sh 对齐）
+
     session_start_path = Path("session_start_unix.txt")
     if session_start_path.exists():
         session_start_unix = float(session_start_path.read_text().strip())
@@ -34,7 +34,6 @@ def record_belt_breathing_rate(
         # ⭐ 打开失败 → 直接返回非 0，供 shell 检测
         return 1
 
-    # 通道说明：一般 2 是呼吸率 BPM
     g.select_sensors([2])  # 1-Force; 2-respiratory rate - bpm
 
     # period 单位是毫秒，这里 1000 = 1 Hz
@@ -127,7 +126,7 @@ def record_belt_breathing_rate(
                 print(f"close() error: {e}")
             print(f"Saved data to {csv_filename}")
 
-    # ⭐ 正常结束：返回 0
+
     return 0
 
 
@@ -157,5 +156,5 @@ if __name__ == "__main__":
         duration_s=300,
         sample_interval_s=1,
     )
-    # ⭐ 把函数返回码透传给 shell
+
     sys.exit(exit_code)
