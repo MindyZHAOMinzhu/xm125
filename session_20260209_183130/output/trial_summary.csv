@@ -1,3 +1,0 @@
-session_file,trial_idx,trial_start,trial_end,valid_fraction,time_to_first_bpm,distance_std,intra_over_inter_median,presence_fraction,max_state_dwell,psd_peak_bpm_median,psd_peak_ratio_median,bandpower_6_30_bpm_median
-20260209_183130_belt.csv,0,0.628,112.628,,,,,,,,,
-20260209_183130_radar.csv,0,5.030130863189697,65.0301308631897,0.665,20.10955047607422,,0.08483097238136425,1.0,54.90520977973938,9.375,1.068322065231678,640.6770611848382
