@@ -1,11 +1,15 @@
-# xm125_breathing_refapp_pi_v1.py
-# XM125 breathing RefApp test on Raspberry Pi -- feasibility CSV version
+# xm125_breathing_refapp_pi_v2.py
+# XM125 breathing RefApp test on Raspberry Pi -- feasibility CSV version (improved)
 
 from __future__ import annotations
-import time
-from pathlib import Path
-import datetime
+
 import csv
+import datetime
+import os
+import time
+import traceback
+from pathlib import Path
+from typing import Any, Optional
 
 import numpy as np
 import acconeer.exptool as et
@@ -17,44 +21,85 @@ from acconeer.exptool.a121.algo.breathing._ref_app import (
     RefAppConfig,
     get_sensor_config,
 )
+
+
 from acconeer.exptool.a121.algo.presence import ProcessorConfig as PresenceProcessorConfig
 
 
-# Detection of distance to mark "enter" time
-ENTER_DISTANCE_MIN = 0.4
-ENTER_DISTANCE_MAX = 0.7
+def _read_session_start_unix(path: Path) -> float:
+    if path.exists():
+        return float(path.read_text().strip())
+    return time.time()
+
+
+def _safe_float(x: Any) -> Any:
+    if x is None:
+        return ""
+    try:
+        v = float(x)
+        if np.isnan(v):
+            return ""
+        return v
+    except Exception:
+        return ""
+
+
+def _safe_bool(x: Any) -> Any:
+    if x is None:
+        return ""
+    try:
+        return bool(x)
+    except Exception:
+        return ""
+
+
+def _format_distances(distances: Any) -> str:
+    # Make CSV-friendly
+    if distances is None:
+        return ""
+    try:
+        if isinstance(distances, (list, tuple, np.ndarray)):
+            arr = np.array(distances).astype(float).tolist()
+            return ";".join([f"{d:.4f}" for d in arr])
+        return str(distances)
+    except Exception:
+        return str(distances)
 
 
 def main():
-
     parser = a121.ExampleArgumentParser()
-    parser.add_argument(
-        "--prefix",
-        type=str,
-        default=None,
-        help="Output filename prefix (without extension).",
-    )
+    parser.add_argument("--prefix", type=str, default=None, help="Output filename prefix (without extension).")
+    parser.add_argument("--port", type=str, default="/dev/ttyUSB0", help="Serial port, e.g., /dev/ttyUSB0")
+    parser.add_argument("--sensor-id", type=int, default=1, help="Sensor ID (XM125 default is 1)")
+
+    # Presence enter window (for enter event)
+    parser.add_argument("--enter-min", type=float, default=0.4, help="Enter distance min (m)")
+    parser.add_argument("--enter-max", type=float, default=0.7, help="Enter distance max (m)")
+    parser.add_argument("--enter-k", type=int, default=1, help="Require K consecutive frames in range to mark enter")
+
+    # Logging/IO behavior
+    parser.add_argument("--print-every-s", type=float, default=1.0, help="Throttle console prints (seconds)")
+    parser.add_argument("--flush-every-n", type=int, default=20, help="Flush CSV every N rows")
+
     args = parser.parse_args()
     et.utils.config_logging(args)
 
     # ---------- 0) read session_start_unix ----------
     session_start_path = Path("session_start_unix.txt")
+    session_start_unix = _read_session_start_unix(session_start_path)
     if session_start_path.exists():
-        session_start_unix = float(session_start_path.read_text().strip())
         print(f"Using session_start_unix from file: {session_start_unix}")
     else:
-        # If running the radar script standalone without this file, fall back to the current time
-        session_start_unix = time.time()
         print(f"No session_start_unix.txt, fallback to {session_start_unix}")
 
-    sensor_id = 1  # XM125 default is 1
-    
-    
+    sensor_id = args.sensor_id
+
     # ---------- 1) Breathing processor config ----------
     breathing_processor_config = BreathingProcessorConfig(
-        lowest_breathing_rate=6,      # 6 bpm (~10 seconds per breath)
-        highest_breathing_rate=30,    # 30 bpm (~2 seconds per breath)
-        time_series_length_s=15,      # Directly related to cold start, can compare experiments later
+        # All configure for BreathingProcessorConfig()
+        lowest_breathing_rate=6,
+        highest_breathing_rate=30,
+        time_series_length_s=15,
     )
 
     # ---------- 2) Presence processor config ----------
@@ -66,26 +111,25 @@ def main():
         inter_frame_deviation_time_const=0.5,
     )
 
-    # ---------- 3) RefApp (整体应用层) config ----------
+    # ---------- 3) RefApp config ----------
     ref_app_config = RefAppConfig(
-        use_presence_processor=True,       # Keep it on for now, turn off if issues arise
-        start_m=0.4,                       # Person approximately 0.4–0.7 m
+        use_presence_processor=True,
+        start_m=0.4,
         end_m=0.7,
         num_distances_to_analyze=3,
-        distance_determination_duration=5, # Use 5s to determine the best distance bin
+        distance_determination_duration=5,
         breathing_config=breathing_processor_config,
         presence_config=presence_config,
-        profile=Profile.PROFILE_5,         # Higher frequency resolution, suitable for near-field small movements
-        sweeps_per_frame=16,               # Perform 16 sweeps per frame (can be adjusted later)
+        profile=Profile.PROFILE_5,
+        sweeps_per_frame=16,
     )
 
-    # ---------- 4) Generate sensor_config and connect to XM125 ----------
+    # ---------- 4) Generate sensor_config and connect ----------
     sensor_config = get_sensor_config(ref_app_config=ref_app_config)
 
-    serial_port = "/dev/ttyUSB0"
     client = a121.Client.open(
-        serial_port=serial_port,
-        override_baudrate=115200,   # Stability prioritized
+        serial_port=args.port,
+        override_baudrate=115200,
     )
     print("✅ Connected to XM125")
     print("Server Info:")
@@ -94,8 +138,7 @@ def main():
     client.setup_session(sensor_config)
     print("✅ Session setup done")
 
-    # ---------- 5) Record raw data (h5) + RefApp ----------
-    # Filename prefix: use --prefix if provided; otherwise generate one
+    # ---------- 5) Output names ----------
     if args.prefix is not None:
         filename_prefix = f"{args.prefix}_radar"
     else:
@@ -108,109 +151,132 @@ def main():
     print(f"📄 Radar H5 will be saved to: {h5file}")
     print(f"📄 Radar CSV will be saved to: {csv_file}")
 
-    ratio = 1.0  # If you want to scale BPM overall later, you can change here
+    ratio = 1.0
 
-    with a121.H5Recorder(h5file, client):
-        ref_app = RefApp(client=client, sensor_id=sensor_id, ref_app_config=ref_app_config)
-        ref_app.start()
+    last_print_t = 0.0
+    frame_idx = 0
 
-        interrupt_handler = et.utils.ExampleInterruptHandler()
-        print("Press Ctrl-C to end session")
+    radar_enter_time: Optional[float] = None
+    enter_streak = 0
 
-        # ⭐ 雷达自动检测的“进入时间”，初始为 None
-        radar_enter_time = None
+    # Try to reference the specific PG* exception if it exists in this install
+    pg_exc = getattr(et, "PGProcessDiedException", None) or getattr(et, "PGProccessDiedException", None)
 
-        with open(csv_file, "w", newline="") as csvfile:
-            csv_writer = csv.writer(csvfile)
-            # 列：专注于 feasibility + radar enter 时间
-            csv_writer.writerow([
-                "Timestamp",              # Relative time (relative to session_start_unix)
-                "Unix_Time",              # Absolute unix time
-                "Quality_Flag",           # "breathing", "breathing_no_rate", "presence_only", "none"
-                "Breath_Rate_BPM",
-                "App_State",
-                "Distances_Being_Analyzed",
-                "Presence_Detected",
-                "Presence_Distance_m",
-                "Intra_Presence_Score",
-                "Inter_Presence_Score",
-                "Presence_Distance_Index",
-                "Radar_Enter_Time",       # Radar first detected presence in range time (seconds), empty if not detected
-            ])
+    try:
+        with a121.H5Recorder(h5file, client):
+            ref_app = RefApp(client=client, sensor_id=sensor_id, ref_app_config=ref_app_config)
+            ref_app.start()
 
-            while not interrupt_handler.got_signal:
-                processed_data = ref_app.get_next()
-                unix_time = time.time()                        # Absolute time
-                current_time = unix_time - session_start_unix  # Relative seconds from session start
+            interrupt_handler = et.utils.ExampleInterruptHandler()
+            print("Press Ctrl-C to end session")
 
-                try:
-                    breathing_res = processed_data.breathing_result
-                    presence_res = processed_data.presence_result
+            with open(csv_file, "w", newline="") as csvfile:
+                csv_writer = csv.writer(csvfile)
+                csv_writer.writerow([
+                    "Frame_Idx",
+                    "Timestamp",
+                    "Unix_Time",
+                    "Quality_Flag",
+                    "Breath_Rate_BPM",
+                    "App_State",
+                    "Distances_Being_Analyzed",
+                    "Presence_Detected",
+                    "Presence_Distance_m",
+                    "Intra_Presence_Score",
+                    "Inter_Presence_Score",
+                    "Presence_Distance_Index",
+                    "Radar_Enter_Time",
+                ])
 
+                while not interrupt_handler.got_signal:
+                    processed_data = ref_app.get_next()
+
+                    unix_time = time.time()
+                    current_time = unix_time - session_start_unix
+
+                    breathing_res = getattr(processed_data, "breathing_result", None)
+                    presence_res = getattr(processed_data, "presence_result", None)
 
                     quality_flag = "none"
-                    breath_rate_bpm = ""
+                    breath_rate_bpm: Any = ""
 
-                    presence_detected = ""
-                    presence_distance = ""
-                    intra_presence_score = ""
-                    inter_presence_score = ""
-                    presence_distance_index = ""
+                    presence_detected: Any = ""
+                    presence_distance: Any = ""
+                    intra_presence_score: Any = ""
+                    inter_presence_score: Any = ""
+                    presence_distance_index: Any = ""
 
-
+                    # ----- Presence -----
                     if presence_res is not None:
-                        presence_detected = presence_res.presence_detected
-                        presence_distance = presence_res.presence_distance
-                        intra_presence_score = presence_res.intra_presence_score
-                        inter_presence_score = presence_res.inter_presence_score
+                        presence_detected = _safe_bool(getattr(presence_res, "presence_detected", None))
+                        presence_distance = _safe_float(getattr(presence_res, "presence_distance", None))
+                        intra_presence_score = _safe_float(getattr(presence_res, "intra_presence_score", None))
+                        inter_presence_score = _safe_float(getattr(presence_res, "inter_presence_score", None))
 
-                        if hasattr(presence_res, "extra_result") and presence_res.extra_result is not None:
-                            presence_distance_index = presence_res.extra_result.presence_distance_index
+                        extra = getattr(presence_res, "extra_result", None)
+                        if extra is not None:
+                            presence_distance_index = getattr(extra, "presence_distance_index", "")
 
-                        # ⭐ If radar_enter_time has not been recorded yet, and presence distance falls within target range, record it
-                        if (
-                            radar_enter_time is None
-                            and presence_detected
-                            and presence_distance is not None
-                            and ENTER_DISTANCE_MIN <= presence_distance <= ENTER_DISTANCE_MAX
-                        ):
-                            radar_enter_time = current_time
-                            print(f"📌 Radar enter time marked at {radar_enter_time:.2f} s")
+                        # Enter marking with anti-jitter streak
+                        in_range = (
+                            presence_detected is True
+                            and isinstance(presence_distance, (int, float))
+                            and (args.enter_min <= presence_distance <= args.enter_max)
+                        )
+                        if radar_enter_time is None:
+                            if in_range:
+                                enter_streak += 1
+                            else:
+                                enter_streak = 0
 
-                    # ----- Handle breathing related -----
+                            if enter_streak >= max(1, args.enter_k):
+                                radar_enter_time = current_time
+                                print(f"📌 Radar enter time marked at {radar_enter_time:.2f} s (k={args.enter_k})")
+
+                    # ----- Breathing -----
                     if breathing_res is not None:
-                        br = breathing_res.breathing_rate
-                        if br:
-                            # case 1: Have breathing_result and have breathing_rate
-                            quality_flag = "breathing"
-                            breath_rate_bpm = br * ratio
-                            print(f"{current_time:.2f}s\t{breath_rate_bpm:.2f} bpm")
+                        br = getattr(breathing_res, "breathing_rate", None)
+                        if br is not None:
+                            try:
+                                br_f = float(br)
+                            except Exception:
+                                br_f = np.nan
+
+                            if not np.isnan(br_f):
+                                quality_flag = "breathing"
+                                breath_rate_bpm = br_f * ratio
+                            else:
+                                quality_flag = "breathing_no_rate"
                         else:
-                            # case 2: Have breathing_result but no rate yet
                             quality_flag = "breathing_no_rate"
-                            print(f"{current_time:.2f}s\tCalculating respiration rate...")
 
                     elif presence_res is not None:
-                        # case 3: Only presence result
                         quality_flag = "presence_only"
-                        print(f"{current_time:.2f}s\tPresence detected, no breathing yet")
-
                     else:
-                        # case 4: No presence either
                         quality_flag = "none"
-                        print(f"{current_time:.2f}s\tNo presence")
 
-                    # ----- Radar enter time (empty if not occurred yet) -----
-                    radar_enter_time_val = radar_enter_time if radar_enter_time is not None else ""
+                    # ----- Throttled prints -----
+                    if (current_time - last_print_t) >= args.print_every_s:
+                        last_print_t = current_time
+                        if quality_flag == "breathing" and isinstance(breath_rate_bpm, (int, float)):
+                            print(f"{current_time:.2f}s\t{breath_rate_bpm:.2f} bpm")
+                        elif quality_flag == "breathing_no_rate":
+                            print(f"{current_time:.2f}s\tCalculating respiration rate...")
+                        elif quality_flag == "presence_only":
+                            print(f"{current_time:.2f}s\tPresence detected, no breathing yet")
+                        else:
+                            print(f"{current_time:.2f}s\tNo presence")
 
-                    # ----- Write a simplified CSV row -----
+                    radar_enter_time_val: Any = radar_enter_time if radar_enter_time is not None else ""
+
                     row = [
+                        frame_idx,
                         current_time,
                         unix_time,
                         quality_flag,
                         breath_rate_bpm,
-                        processed_data.app_state,
-                        processed_data.distances_being_analyzed,
+                        getattr(processed_data, "app_state", ""),
+                        _format_distances(getattr(processed_data, "distances_being_analyzed", None)),
                         presence_detected,
                         presence_distance,
                         intra_presence_score,
@@ -219,15 +285,35 @@ def main():
                         radar_enter_time_val,
                     ]
                     csv_writer.writerow(row)
+                    frame_idx += 1
 
-                except et.PGProccessDiedException:
-                    break
+                    # ----- Safer CSV persistence -----
+                    if args.flush_every_n > 0 and (frame_idx % args.flush_every_n == 0):
+                        csvfile.flush()
+                        try:
+                            os.fsync(csvfile.fileno())
+                        except Exception:
+                            pass
 
-        ref_app.stop()
-        print("Disconnecting...")
+            ref_app.stop()
+            print("Disconnecting...")
 
-    client.close()
-    print("Done.")
+    except KeyboardInterrupt:
+        print("\nKeyboardInterrupt received. Stopping...")
+    except Exception as e:
+        # If it's the PG exception (if available), treat similarly; otherwise dump traceback.
+        if pg_exc is not None and isinstance(e, pg_exc):
+            print("PG process died, exiting.")
+        else:
+            print("❌ Exception occurred:")
+            print(e)
+            traceback.print_exc()
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+        print("Done.")
 
 
 if __name__ == "__main__":
