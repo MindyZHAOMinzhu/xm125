@@ -1,0 +1,9 @@
+{
+  "MAE": 0.489288961555701,
+  "RMSE": 0.5804076768524136,
+  "bias": -0.35275528931083905,
+  "N_points": 7,
+  "time_to_first_radar_valid_after_enter": 0.04615378379821777,
+  "time_to_first_belt_point_after_enter": 6.474332571029663,
+  "time_to_first_aligned_error_point": 16.474284887313843
+}
