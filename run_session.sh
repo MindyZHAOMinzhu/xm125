@@ -2,12 +2,31 @@
 
 set -e
 
-trap '
-echo "Stopping all sensors...";
-kill $RADAR_PID $BELT_PID 2>/dev/null || true;
-sleep 0.2;
-exit 1
-' INT
+cleanup() {
+    echo "Stopping all sensors..."
+
+    # Ask wrapper + children to stop gracefully first
+    if [ -n "${RADAR_PID:-}" ]; then
+        kill "$RADAR_PID" 2>/dev/null || true
+    fi
+    if [ -n "${BELT_PID:-}" ]; then
+        kill "$BELT_PID" 2>/dev/null || true
+        sudo -n pkill -TERM -P "$BELT_PID" 2>/dev/null || true
+    fi
+
+    sleep 1
+
+    # Force kill leftovers (important when belt launched via sudo wrapper)
+    if [ -n "${RADAR_PID:-}" ]; then
+        kill -9 "$RADAR_PID" 2>/dev/null || true
+    fi
+    if [ -n "${BELT_PID:-}" ]; then
+        kill -9 "$BELT_PID" 2>/dev/null || true
+        sudo -n pkill -KILL -P "$BELT_PID" 2>/dev/null || true
+    fi
+}
+
+trap 'cleanup; exit 1' INT TERM
 
 
 SESSION_ID=$(date +%Y%m%d_%H%M%S)
@@ -36,7 +55,9 @@ echo
 ######################################
 echo "Starting belt..."
 sudo /home/mindy/xm125_env/bin/python ../belt_logger.py \
-    --out "${SESSION_ID}_belt.csv" &
+    --out "${SESSION_ID}_belt.csv" \
+    --duration-s 0 \
+    --no-data-timeout-s 0 &
 BELT_PID=$!
 echo "✨ Belt PID = $BELT_PID"
 echo

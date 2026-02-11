@@ -1,6 +1,7 @@
 import time
 import csv
 import argparse
+import signal
 from datetime import datetime
 from pathlib import Path
 import sys      
@@ -10,8 +11,9 @@ from gdx import gdx
 
 def record_belt_breathing_rate(
     csv_filename="belt_breathing_log.csv",
-    duration_s=300,
+    duration_s=0,
     sample_interval_s=1,
+    no_data_timeout_s=8,
 ):
 
     session_start_path = Path("session_start_unix.txt")
@@ -42,10 +44,19 @@ def record_belt_breathing_rate(
 
     # 用 start_time 控制采集时长 & 采样间隔
     start_time = time.time()
+    stop_requested = False
+
+    def _request_stop(_signum, _frame):
+        nonlocal stop_requested
+        stop_requested = True
+
+    # Ensure TERM/INT both trigger graceful g.stop()/g.close() path
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
 
     # ⭐ 新增：用于“没数据就退出”的逻辑
     got_any_data = False                    # 开始到现在有没有拿到过 data
-    NO_DATA_TIMEOUT = 8                     # 比如 8 秒一直没有 data 就判失败
+    NO_DATA_TIMEOUT = no_data_timeout_s     # <=0 means disabled
 
     with open(csv_filename, "w", newline="") as f:
         writer = csv.writer(f)
@@ -65,7 +76,12 @@ def record_belt_breathing_rate(
 
         k = 0
         try:
-            while time.time() - start_time < duration_s:
+            while True:
+                if stop_requested:
+                    print("Stop requested, exiting belt loop...")
+                    break
+                if duration_s and duration_s > 0 and (time.time() - start_time >= duration_s):
+                    break
                 now_unix = time.time()
                 elapsed = now_unix - session_start_unix      # ✅ 用 session 起点
                 now_unix_rounded = int(now_unix)
@@ -95,7 +111,7 @@ def record_belt_breathing_rate(
                     print(f"{human_time}: No data returned")
 
                 # ⭐ 关键：如果从开始到现在都没拿到任何 data，且超过 NO_DATA_TIMEOUT 秒 → 判失败
-                if (not got_any_data) and (time.time() - start_time > NO_DATA_TIMEOUT):
+                if (NO_DATA_TIMEOUT is not None) and (NO_DATA_TIMEOUT > 0) and (not got_any_data) and (time.time() - start_time > NO_DATA_TIMEOUT):
                     print(f"❌ No belt data for {NO_DATA_TIMEOUT} seconds after start. Exiting with error.")
                     try:
                         g.stop()
@@ -142,6 +158,18 @@ def parse_args():
         default=None,
         help="Output CSV filename (e.g., belt_log.csv)",
     )
+    parser.add_argument(
+        "--duration-s",
+        type=float,
+        default=0.0,
+        help="Total recording duration in seconds. <=0 means run until Ctrl-C.",
+    )
+    parser.add_argument(
+        "--no-data-timeout-s",
+        type=float,
+        default=8.0,
+        help="Exit if no data seen within this many seconds after start. <=0 disables this check.",
+    )
     return parser.parse_args()
 
 
@@ -154,8 +182,9 @@ if __name__ == "__main__":
 
     exit_code = record_belt_breathing_rate(
         csv_filename=args.csv_filename,
-        duration_s=300,
+        duration_s=args.duration_s,
         sample_interval_s=1,
+        no_data_timeout_s=args.no_data_timeout_s,
     )
 
     sys.exit(exit_code)
