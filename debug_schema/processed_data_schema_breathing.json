@@ -1,0 +1,152 @@
+{
+  "processed_data_type": "RefAppResult",
+  "processed_data": {
+    "app_state": {
+      "type": "AppState"
+    },
+    "breathing_result": {
+      "type": "BreathingProcessorResult"
+    },
+    "distances_being_analyzed": {
+      "type": "tuple",
+      "length": 2
+    },
+    "presence_result": {
+      "type": "ProcessorResult"
+    }
+  },
+  "presence_result_type": "ProcessorResult",
+  "presence_result": {
+    "extra_result": {
+      "type": "ProcessorExtraResult"
+    },
+    "inter": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "inter_presence_score": {
+      "type": "float64",
+      "value": 21.755557704912253
+    },
+    "intra": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "intra_presence_score": {
+      "type": "float64",
+      "value": 1.8383060635605053
+    },
+    "presence_detected": {
+      "type": "bool",
+      "value": true
+    },
+    "presence_distance": {
+      "type": "float64",
+      "value": 0.6405821442604057
+    }
+  },
+  "presence_result_extra_type": "ProcessorExtraResult",
+  "presence_result_extra": {
+    "abs_mean_sweep": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "fast_lp_mean_sweep": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "frame": {
+      "type": "ndarray",
+      "shape": [
+        16,
+        4
+      ],
+      "dtype": "complex128"
+    },
+    "lp_noise": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "presence_distance_index": {
+      "type": "int",
+      "value": 2
+    },
+    "slow_lp_mean_sweep": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    }
+  },
+  "breathing_result_type": "BreathingProcessorResult",
+  "breathing_result": {
+    "breathing_rate": {
+      "type": "NoneType",
+      "value": null
+    },
+    "extra_result": {
+      "type": "BreathingProcessorExtraResult"
+    }
+  },
+  "breathing_result_extra_type": "BreathingProcessorExtraResult",
+  "breathing_result_extra": {
+    "all_breathing_rate_history": {
+      "type": "ndarray",
+      "shape": [
+        2400
+      ],
+      "dtype": "float64"
+    },
+    "breathing_motion": {
+      "type": "ndarray",
+      "shape": [
+        300
+      ],
+      "dtype": "float64"
+    },
+    "breathing_rate_history": {
+      "type": "ndarray",
+      "shape": [
+        2400
+      ],
+      "dtype": "float64"
+    },
+    "frequencies": {
+      "type": "ndarray",
+      "shape": [
+        257
+      ],
+      "dtype": "float64"
+    },
+    "psd": {
+      "type": "ndarray",
+      "shape": [
+        257
+      ],
+      "dtype": "float64"
+    },
+    "time_vector": {
+      "type": "ndarray",
+      "shape": [
+        2400
+      ],
+      "dtype": "float64"
+    }
+  }
+}

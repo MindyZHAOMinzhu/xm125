@@ -5,13 +5,11 @@ from __future__ import annotations
 
 import csv
 import datetime
-import json
 import os
-import subprocess
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional
 
 import numpy as np
 import acconeer.exptool as et
@@ -23,8 +21,10 @@ from acconeer.exptool.a121.algo.breathing._ref_app import (
     RefAppConfig,
     get_sensor_config,
 )
-
 from acconeer.exptool.a121.algo.presence import ProcessorConfig as PresenceProcessorConfig
+
+
+EPS = 1e-9
 
 
 def _read_session_start_unix(path: Path) -> float:
@@ -59,9 +59,7 @@ def _format_distances(distances: Any) -> str:
     if distances is None:
         return ""
     try:
-        if isinstance(distances, tuple):
-            return str(distances)
-        if isinstance(distances, (list, np.ndarray)):
+        if isinstance(distances, (list, tuple, np.ndarray)):
             arr = np.array(distances).astype(float).tolist()
             return ";".join([f"{d:.4f}" for d in arr])
         return str(distances)
@@ -69,74 +67,26 @@ def _format_distances(distances: Any) -> str:
         return str(distances)
 
 
-def _get_git_commit_short() -> str:
+def _as_float_array(x: Any) -> Optional[np.ndarray]:
+    if x is None:
+        return None
     try:
-        out = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL)
-        return out.decode("utf-8", errors="ignore").strip()
-    except Exception:
-        return ""
-
-
-def _get_distance_grid_m(sensor_config: Any) -> Optional[np.ndarray]:
-    # Best-effort using official utils (names differ across versions)
-    try:
-        from acconeer.exptool.a121.algo._utils import get_distances_m  # type: ignore
-
-        distances_m = get_distances_m(sensor_config)
-        return np.array(distances_m, dtype=float)
-    except Exception:
-        try:
-            from acconeer.exptool.a121.algo import get_distances_m  # type: ignore
-
-            distances_m = get_distances_m(sensor_config)
-            return np.array(distances_m, dtype=float)
-        except Exception:
+        arr = np.asarray(x, dtype=float)
+        if arr.size == 0:
             return None
-
-
-def _extract_array(obj: Any, attr_names: Sequence[str]) -> Optional[np.ndarray]:
-    for name in attr_names:
-        try:
-            val = getattr(obj, name, None)
-        except Exception:
-            val = None
-        if val is None:
-            continue
-        try:
-            arr = np.array(val, dtype=float)
-            if arr.size == 0:
-                continue
-            return arr
-        except Exception:
-            continue
-    return None
-
-
-def _slice_array(arr: np.ndarray, start_idx: int, end_idx: int) -> np.ndarray:
-    # Try to interpret tuple as inclusive if possible, otherwise fall back to exclusive
-    n = arr.size
-    if n == 0:
         return arr
-    s = max(0, start_idx)
-    if end_idx < 0:
-        return arr[s:]
-    if end_idx < n:
-        return arr[s : end_idx + 1]
-    if end_idx <= n:
-        return arr[s:end_idx]
-    return arr[s:]
+    except Exception:
+        return None
 
 
-def _peak_ratio(psd: np.ndarray) -> Any:
-    if psd.size < 2:
+def _last_finite(arr: Optional[np.ndarray]) -> Any:
+    if arr is None or arr.size == 0:
         return ""
     try:
-        idx = np.argsort(psd)[::-1]
-        peak1 = psd[idx[0]]
-        peak2 = psd[idx[1]]
-        if peak2 == 0:
+        finite_vals = arr[np.isfinite(arr)]
+        if finite_vals.size == 0:
             return ""
-        return float(peak1 / peak2)
+        return float(finite_vals[-1])
     except Exception:
         return ""
 
@@ -171,7 +121,6 @@ def main():
 
     # ---------- 1) Breathing processor config ----------
     breathing_processor_config = BreathingProcessorConfig(
-        # All configure for BreathingProcessorConfig()
         lowest_breathing_rate=6,
         highest_breathing_rate=30,
         time_series_length_s=15,
@@ -201,7 +150,6 @@ def main():
 
     # ---------- 4) Generate sensor_config and connect ----------
     sensor_config = get_sensor_config(ref_app_config=ref_app_config)
-    distance_grid_m = _get_distance_grid_m(sensor_config)
 
     client = a121.Client.open(
         serial_port=args.port,
@@ -235,39 +183,9 @@ def main():
     radar_enter_time: Optional[float] = None
     enter_streak = 0
 
-    # State dwell tracking
-    last_app_state: Any = None
-    state_start_time: Optional[float] = None
-
-    # Traceability metadata (to prevent running an old script or config)
-    script_path = os.path.abspath(__file__)
-    git_commit = _get_git_commit_short()
-    run_config = {
-        "profile": str(ref_app_config.profile),
-        "sweeps_per_frame": ref_app_config.sweeps_per_frame,
-        "start_m": ref_app_config.start_m,
-        "end_m": ref_app_config.end_m,
-        "num_distances_to_analyze": ref_app_config.num_distances_to_analyze,
-        "distance_determination_duration": ref_app_config.distance_determination_duration,
-        "breathing_rate_low": breathing_processor_config.lowest_breathing_rate,
-        "breathing_rate_high": breathing_processor_config.highest_breathing_rate,
-        "breathing_time_series_length_s": breathing_processor_config.time_series_length_s,
-        "presence_intra_detection_threshold": presence_config.intra_detection_threshold,
-        "presence_intra_frame_time_const": presence_config.intra_frame_time_const,
-        "presence_inter_frame_fast_cutoff": presence_config.inter_frame_fast_cutoff,
-        "presence_inter_frame_slow_cutoff": presence_config.inter_frame_slow_cutoff,
-        "presence_inter_frame_deviation_time_const": presence_config.inter_frame_deviation_time_const,
-        "enter_min": args.enter_min,
-        "enter_max": args.enter_max,
-        "enter_k": args.enter_k,
-    }
-    run_config_json = json.dumps(run_config, separators=(",", ":"), sort_keys=True)
-
     # Try to reference the specific PG* exception if it exists in this install
     pg_exc = getattr(et, "PGProcessDiedException", None) or getattr(et, "PGProccessDiedException", None)
 
-    # One-time schema probe for introspection (prints available attributes once)
-    schema_probed = False
     ref_app: Optional[RefApp] = None
 
     try:
@@ -280,53 +198,51 @@ def main():
 
             with open(csv_file, "w", newline="") as csvfile:
                 csv_writer = csv.writer(csvfile)
-                # CSV header (kept stable for offline analysis)
                 csv_writer.writerow([
-                    "Frame_Idx",
                     "Timestamp",
                     "Unix_Time",
-                    # Loop/health diagnostics
-                    "Loop_Dt_s",
-                    "State_Dwell_s",
-                    "Since_Enter_s",
                     "Quality_Flag",
                     "Breath_Rate_BPM",
-                    # Breathing validity and convenience (Hz)
-                    "Breath_Rate_Hz",
-                    "Breathing_Valid",
                     "App_State",
                     "Distances_Being_Analyzed",
-                    # Distances_Being_Analyzed as index range
-                    "DBA_Start_Idx",
-                    "DBA_End_Idx",
-                    # If distance grid is available, center bin in meters
-                    "Distance_Bin_Center_m",
                     "Presence_Detected",
                     "Presence_Distance_m",
                     "Intra_Presence_Score",
                     "Inter_Presence_Score",
-                    # Presence curves (scalarized)
+                    "Presence_Distance_Index",
+                    "Radar_Enter_Time",
                     "Intra_Max_All",
                     "Inter_Max_All",
-                    "Intra_Max_InSlice",
-                    "Inter_Max_InSlice",
-                    "Intra_Over_Inter",
-                    "Presence_Distance_Index",
-                    # Breathing PSD-derived scalars
+                    "Intra_Over_Inter_Max",
+                    "Signal_Peak_Bin",
+                    "Signal_Peak_Value",
+                    "Noise_Median",
+                    "Peak_To_Noise",
+                    "Signal_At_PresenceBin",
+                    "Noise_At_PresenceBin",
+                    "PresenceBin_To_Noise",
+                    "FastSlow_Diff_Max",
+                    "FastSlow_Diff_AtPresenceBin",
+                    "Frame_Energy",
+                    "Sweep_Energy_STD",
+                    "Sweep_Energy_P2P",
+                    "Bin_Energy_STD",
+                    "PSD_Peak_Idx",
                     "PSD_Peak_Freq_Hz",
                     "PSD_Peak_BPM",
                     "PSD_Peak_Height",
                     "PSD_Peak_Ratio_1_2",
                     "Bandpower_6_30_BPM",
-                    "Radar_Enter_Time",
-                    # Traceability metadata
-                    "Script_Path",
-                    "Run_Config_JSON",
-                    "Git_Commit",
+                    "Motion_RMS",
+                    "Motion_P2P",
+                    "Rate_Hist_Last",
+                    "Rate_Hist_Valid_Frac_10s",
+                    "Buffer_Coverage_s",
+                    "DBA_Start_Idx",
+                    "DBA_End_Idx",
                 ])
 
                 while not interrupt_handler.got_signal:
-                    loop_start = time.perf_counter()
                     processed_data = ref_app.get_next()
 
                     unix_time = time.time()
@@ -334,27 +250,6 @@ def main():
 
                     breathing_res = getattr(processed_data, "breathing_result", None)
                     presence_res = getattr(processed_data, "presence_result", None)
-
-                    # One-time schema probe for diagnostics (minimal, not per-frame)
-                    if not schema_probed:
-                        schema_probed = True
-                        try:
-                            if presence_res is not None:
-                                pres_attrs = [a for a in dir(presence_res) if not a.startswith("_")]
-                                print(f"presence_result attrs: {pres_attrs}")
-                                extra = getattr(presence_res, "extra_result", None)
-                                if extra is not None:
-                                    extra_attrs = [a for a in dir(extra) if not a.startswith("_")]
-                                    print(f"presence_extra_result attrs: {extra_attrs}")
-                            if breathing_res is not None:
-                                br_attrs = [a for a in dir(breathing_res) if not a.startswith("_")]
-                                print(f"breathing_result attrs: {br_attrs}")
-                                extra = getattr(breathing_res, "extra_result", None)
-                                if extra is not None:
-                                    extra_attrs = [a for a in dir(extra) if not a.startswith("_")]
-                                    print(f"breathing_extra_result attrs: {extra_attrs}")
-                        except Exception:
-                            pass
 
                     quality_flag = "none"
                     breath_rate_bpm: Any = ""
@@ -367,19 +262,39 @@ def main():
 
                     intra_max_all: Any = ""
                     inter_max_all: Any = ""
-                    intra_max_slice: Any = ""
-                    inter_max_slice: Any = ""
-                    intra_over_inter: Any = ""
+                    intra_over_inter_max: Any = ""
 
-                    dba_start_idx: Any = ""
-                    dba_end_idx: Any = ""
-                    distance_bin_center_m: Any = ""
+                    signal_peak_bin: Any = ""
+                    signal_peak_value: Any = ""
+                    noise_median: Any = ""
+                    peak_to_noise: Any = ""
+                    signal_at_presence_bin: Any = ""
+                    noise_at_presence_bin: Any = ""
+                    presencebin_to_noise: Any = ""
 
+                    fastslow_diff_max: Any = ""
+                    fastslow_diff_at_presence_bin: Any = ""
+
+                    frame_energy: Any = ""
+                    sweep_energy_std: Any = ""
+                    sweep_energy_p2p: Any = ""
+                    bin_energy_std: Any = ""
+
+                    psd_peak_idx: Any = ""
                     psd_peak_freq_hz: Any = ""
                     psd_peak_bpm: Any = ""
                     psd_peak_height: Any = ""
-                    psd_peak_ratio: Any = ""
+                    psd_peak_ratio_1_2: Any = ""
                     bandpower_6_30_bpm: Any = ""
+
+                    motion_rms: Any = ""
+                    motion_p2p: Any = ""
+                    rate_hist_last: Any = ""
+                    rate_hist_valid_frac_10s: Any = ""
+                    buffer_coverage_s: Any = ""
+
+                    dba_start_idx: Any = ""
+                    dba_end_idx: Any = ""
 
                     # ----- Presence -----
                     if presence_res is not None:
@@ -388,9 +303,9 @@ def main():
                         intra_presence_score = _safe_float(getattr(presence_res, "intra_presence_score", None))
                         inter_presence_score = _safe_float(getattr(presence_res, "inter_presence_score", None))
 
-                        extra = getattr(presence_res, "extra_result", None)
-                        if extra is not None:
-                            presence_distance_index = getattr(extra, "presence_distance_index", "")
+                        presence_extra = getattr(presence_res, "extra_result", None)
+                        if presence_extra is not None:
+                            presence_distance_index = getattr(presence_extra, "presence_distance_index", "")
 
                         # Enter marking with anti-jitter streak
                         in_range = (
@@ -408,13 +323,8 @@ def main():
                                 radar_enter_time = current_time
                                 print(f"📌 Radar enter time marked at {radar_enter_time:.2f} s (k={args.enter_k})")
 
-                        # Presence array-derived features (scalarized from intra/inter curves)
-                        intra_arr = _extract_array(presence_res, ["intra"])
-                        if intra_arr is None and extra is not None:
-                            intra_arr = _extract_array(extra, ["intra"])
-                        inter_arr = _extract_array(presence_res, ["inter"])
-                        if inter_arr is None and extra is not None:
-                            inter_arr = _extract_array(extra, ["inter"])
+                        intra_arr = _as_float_array(getattr(presence_res, "intra", None))
+                        inter_arr = _as_float_array(getattr(presence_res, "inter", None))
 
                         if intra_arr is not None:
                             try:
@@ -426,54 +336,92 @@ def main():
                                 inter_max_all = float(np.max(inter_arr))
                             except Exception:
                                 pass
-
-                        # Distances_Being_Analyzed can be a (start_idx, end_idx) tuple
-                        dba = getattr(processed_data, "distances_being_analyzed", None)
-                        if isinstance(dba, tuple) and len(dba) == 2:
+                        if isinstance(intra_max_all, (int, float)) and isinstance(inter_max_all, (int, float)):
                             try:
-                                dba_start_idx = int(dba[0])
-                                dba_end_idx = int(dba[1])
-                            except Exception:
-                                dba_start_idx = ""
-                                dba_end_idx = ""
-
-                        # Map center bin to meters if distance grid is available
-                        if isinstance(dba_start_idx, int) and isinstance(dba_end_idx, int):
-                            if distance_grid_m is not None:
-                                try:
-                                    center_idx = int(round((dba_start_idx + dba_end_idx) / 2.0))
-                                    if 0 <= center_idx < len(distance_grid_m):
-                                        distance_bin_center_m = float(distance_grid_m[center_idx])
-                                except Exception:
-                                    pass
-
-                            # Max within the analyzed slice
-                            if intra_arr is not None:
-                                try:
-                                    sliced = _slice_array(intra_arr, dba_start_idx, dba_end_idx)
-                                    if sliced.size > 0:
-                                        intra_max_slice = float(np.max(sliced))
-                                except Exception:
-                                    pass
-                            if inter_arr is not None:
-                                try:
-                                    sliced = _slice_array(inter_arr, dba_start_idx, dba_end_idx)
-                                    if sliced.size > 0:
-                                        inter_max_slice = float(np.max(sliced))
-                                except Exception:
-                                    pass
-
-                        # Intra/Inter ratio for quick stability diagnostics
-                        if isinstance(intra_presence_score, (int, float)) and isinstance(inter_presence_score, (int, float)):
-                            try:
-                                intra_over_inter = float(intra_presence_score / (inter_presence_score + 1e-6))
+                                intra_over_inter_max = float(intra_max_all / (inter_max_all + EPS))
                             except Exception:
                                 pass
-                        elif isinstance(intra_max_slice, (int, float)) and isinstance(inter_max_slice, (int, float)):
+
+                        abs_mean_sweep = _as_float_array(getattr(presence_extra, "abs_mean_sweep", None))
+                        lp_noise = _as_float_array(getattr(presence_extra, "lp_noise", None))
+                        fast_lp_mean_sweep = _as_float_array(getattr(presence_extra, "fast_lp_mean_sweep", None))
+                        slow_lp_mean_sweep = _as_float_array(getattr(presence_extra, "slow_lp_mean_sweep", None))
+
+                        frame = getattr(presence_extra, "frame", None)
+
+                        if abs_mean_sweep is not None:
                             try:
-                                intra_over_inter = float(intra_max_slice / (inter_max_slice + 1e-6))
+                                signal_peak_bin = int(np.argmax(abs_mean_sweep))
+                                signal_peak_value = float(np.max(abs_mean_sweep))
                             except Exception:
                                 pass
+
+                        if lp_noise is not None:
+                            try:
+                                noise_median = float(np.median(lp_noise))
+                            except Exception:
+                                pass
+
+                        if isinstance(signal_peak_value, (int, float)) and isinstance(noise_median, (int, float)):
+                            try:
+                                peak_to_noise = float(signal_peak_value / (noise_median + EPS))
+                            except Exception:
+                                pass
+
+                        idx = None
+                        try:
+                            idx = int(presence_distance_index)
+                        except Exception:
+                            idx = None
+
+                        if idx is not None:
+                            try:
+                                if abs_mean_sweep is not None and 0 <= idx < abs_mean_sweep.size:
+                                    signal_at_presence_bin = float(abs_mean_sweep[idx])
+                                if lp_noise is not None and 0 <= idx < lp_noise.size:
+                                    noise_at_presence_bin = float(lp_noise[idx])
+                            except Exception:
+                                pass
+
+                        if isinstance(signal_at_presence_bin, (int, float)) and isinstance(noise_at_presence_bin, (int, float)):
+                            try:
+                                presencebin_to_noise = float(signal_at_presence_bin / (noise_at_presence_bin + EPS))
+                            except Exception:
+                                pass
+
+                        if fast_lp_mean_sweep is not None and slow_lp_mean_sweep is not None:
+                            try:
+                                if fast_lp_mean_sweep.size == slow_lp_mean_sweep.size:
+                                    diff = np.abs(fast_lp_mean_sweep - slow_lp_mean_sweep)
+                                    fastslow_diff_max = float(np.max(diff))
+                                    if idx is not None and 0 <= idx < diff.size:
+                                        fastslow_diff_at_presence_bin = float(diff[idx])
+                            except Exception:
+                                pass
+
+                        if frame is not None:
+                            try:
+                                a = np.abs(np.asarray(frame))
+                                if a.ndim == 2 and a.size > 0:
+                                    energy = a**2
+                                    frame_energy = float(np.mean(energy))
+                                    sweep_energy = np.mean(energy, axis=1)
+                                    bin_energy = np.mean(energy, axis=0)
+                                    sweep_energy_std = float(np.std(sweep_energy))
+                                    sweep_energy_p2p = float(np.max(sweep_energy) - np.min(sweep_energy))
+                                    bin_energy_std = float(np.std(bin_energy))
+                            except Exception:
+                                pass
+
+                    # Distances_Being_Analyzed tuple parsing
+                    dba = getattr(processed_data, "distances_being_analyzed", None)
+                    if isinstance(dba, tuple) and len(dba) == 2:
+                        try:
+                            dba_start_idx = int(dba[0])
+                            dba_end_idx = int(dba[1])
+                        except Exception:
+                            dba_start_idx = ""
+                            dba_end_idx = ""
 
                     # ----- Breathing -----
                     if breathing_res is not None:
@@ -492,23 +440,61 @@ def main():
                         else:
                             quality_flag = "breathing_no_rate"
 
-                        # Breathing extra_result may include PSD and frequency arrays
-                        extra = getattr(breathing_res, "extra_result", None)
-                        if extra is not None:
-                            psd = _extract_array(extra, ["psd"])
-                            freqs = _extract_array(extra, ["frequencies", "freqs", "frequency"])
-                            if psd is not None and freqs is not None and psd.size == freqs.size:
-                                try:
-                                    peak_idx = int(np.argmax(psd))
-                                    psd_peak_freq_hz = float(freqs[peak_idx])
-                                    psd_peak_bpm = float(psd_peak_freq_hz * 60.0)
-                                    psd_peak_height = float(psd[peak_idx])
-                                    psd_peak_ratio = _peak_ratio(psd)
+                        breathing_extra = getattr(breathing_res, "extra_result", None)
+                        if breathing_extra is not None:
+                            psd = _as_float_array(getattr(breathing_extra, "psd", None))
+                            frequencies = _as_float_array(getattr(breathing_extra, "frequencies", None))
 
-                                    # Bandpower in 6-30 BPM (0.1-0.5 Hz) if spacing is consistent
-                                    band_mask = (freqs >= (6.0 / 60.0)) & (freqs <= (30.0 / 60.0))
+                            if psd is not None and frequencies is not None and psd.size == frequencies.size:
+                                try:
+                                    psd_peak_idx = int(np.argmax(psd))
+                                    psd_peak_freq_hz = float(frequencies[psd_peak_idx])
+                                    psd_peak_bpm = float(psd_peak_freq_hz * 60.0)
+                                    psd_peak_height = float(psd[psd_peak_idx])
+
+                                    if psd.size >= 2:
+                                        top2_idx = np.argpartition(psd, -2)[-2:]
+                                        top2_vals = np.sort(psd[top2_idx])[::-1]
+                                        psd_peak_ratio_1_2 = float(top2_vals[0] / (top2_vals[1] + EPS))
+
+                                    band_mask = (frequencies >= (6.0 / 60.0)) & (frequencies <= (30.0 / 60.0))
                                     if np.any(band_mask):
                                         bandpower_6_30_bpm = float(np.sum(psd[band_mask]))
+                                except Exception:
+                                    pass
+
+                            breathing_motion = _as_float_array(getattr(breathing_extra, "breathing_motion", None))
+                            if breathing_motion is not None:
+                                try:
+                                    motion_rms = float(np.sqrt(np.mean(breathing_motion**2)))
+                                    motion_p2p = float(np.max(breathing_motion) - np.min(breathing_motion))
+                                except Exception:
+                                    pass
+
+                            time_vector = _as_float_array(getattr(breathing_extra, "time_vector", None))
+                            breathing_rate_history = _as_float_array(getattr(breathing_extra, "breathing_rate_history", None))
+
+                            rate_hist_last = _last_finite(breathing_rate_history)
+
+                            if time_vector is not None and time_vector.size > 1:
+                                try:
+                                    buffer_coverage_s = float(time_vector[-1] - time_vector[0])
+                                except Exception:
+                                    pass
+
+                            if (
+                                time_vector is not None
+                                and breathing_rate_history is not None
+                                and time_vector.size == breathing_rate_history.size
+                                and time_vector.size > 0
+                            ):
+                                try:
+                                    t_last = float(time_vector[-1])
+                                    mask = (t_last - time_vector) <= 10.0
+                                    n = int(np.sum(mask))
+                                    if n > 0:
+                                        valid_n = int(np.sum(np.isfinite(breathing_rate_history[mask])))
+                                        rate_hist_valid_frac_10s = float(valid_n / n)
                                 except Exception:
                                     pass
 
@@ -516,10 +502,6 @@ def main():
                         quality_flag = "presence_only"
                     else:
                         quality_flag = "none"
-
-                    # Breathing validity (strict bool) and Hz conversion
-                    breath_valid = isinstance(breath_rate_bpm, (int, float))
-                    breath_rate_hz = (breath_rate_bpm / 60.0) if breath_valid else ""
 
                     # ----- Throttled prints -----
                     if (current_time - last_print_t) >= args.print_every_s:
@@ -534,51 +516,49 @@ def main():
                             print(f"{current_time:.2f}s\tNo presence")
 
                     radar_enter_time_val: Any = radar_enter_time if radar_enter_time is not None else ""
-                    since_enter_s = (current_time - radar_enter_time) if radar_enter_time is not None else ""
-
-                    app_state = getattr(processed_data, "app_state", "")
-                    if app_state != last_app_state:
-                        last_app_state = app_state
-                        state_start_time = current_time
-                    state_dwell_s = (current_time - state_start_time) if state_start_time is not None else ""
-
-                    loop_dt_s = time.perf_counter() - loop_start
 
                     row = [
-                        frame_idx,
                         current_time,
                         unix_time,
-                        loop_dt_s,
-                        state_dwell_s,
-                        since_enter_s,
                         quality_flag,
                         breath_rate_bpm,
-                        breath_rate_hz,
-                        breath_valid,
-                        app_state,
+                        getattr(processed_data, "app_state", ""),
                         _format_distances(getattr(processed_data, "distances_being_analyzed", None)),
-                        dba_start_idx,
-                        dba_end_idx,
-                        distance_bin_center_m,
                         presence_detected,
                         presence_distance,
                         intra_presence_score,
                         inter_presence_score,
+                        presence_distance_index,
+                        radar_enter_time_val,
                         intra_max_all,
                         inter_max_all,
-                        intra_max_slice,
-                        inter_max_slice,
-                        intra_over_inter,
-                        presence_distance_index,
+                        intra_over_inter_max,
+                        signal_peak_bin,
+                        signal_peak_value,
+                        noise_median,
+                        peak_to_noise,
+                        signal_at_presence_bin,
+                        noise_at_presence_bin,
+                        presencebin_to_noise,
+                        fastslow_diff_max,
+                        fastslow_diff_at_presence_bin,
+                        frame_energy,
+                        sweep_energy_std,
+                        sweep_energy_p2p,
+                        bin_energy_std,
+                        psd_peak_idx,
                         psd_peak_freq_hz,
                         psd_peak_bpm,
                         psd_peak_height,
-                        psd_peak_ratio,
+                        psd_peak_ratio_1_2,
                         bandpower_6_30_bpm,
-                        radar_enter_time_val,
-                        script_path,
-                        run_config_json,
-                        git_commit,
+                        motion_rms,
+                        motion_p2p,
+                        rate_hist_last,
+                        rate_hist_valid_frac_10s,
+                        buffer_coverage_s,
+                        dba_start_idx,
+                        dba_end_idx,
                     ]
                     csv_writer.writerow(row)
                     frame_idx += 1
@@ -601,7 +581,6 @@ def main():
     except KeyboardInterrupt:
         print("\nKeyboardInterrupt received. Stopping...")
     except Exception as e:
-        # If it's the PG exception (if available), treat similarly; otherwise dump traceback.
         if pg_exc is not None and isinstance(e, pg_exc):
             print("PG process died, exiting.")
         else:
@@ -609,7 +588,6 @@ def main():
             print(e)
             traceback.print_exc()
     finally:
-        # Ensure session is stopped before recorder detach/close
         if ref_app is not None:
             try:
                 ref_app.stop()

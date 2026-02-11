@@ -1,0 +1,98 @@
+{
+  "processed_data_type": "RefAppResult",
+  "processed_data": {
+    "app_state": {
+      "type": "AppState"
+    },
+    "breathing_result": {
+      "type": "NoneType",
+      "value": null
+    },
+    "distances_being_analyzed": {
+      "type": "NoneType",
+      "value": null
+    },
+    "presence_result": {
+      "type": "ProcessorResult"
+    }
+  },
+  "presence_result_type": "ProcessorResult",
+  "presence_result": {
+    "extra_result": {
+      "type": "ProcessorExtraResult"
+    },
+    "inter": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "inter_presence_score": {
+      "type": "float64",
+      "value": 0.0
+    },
+    "intra": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "intra_presence_score": {
+      "type": "float64",
+      "value": 0.11876635916447019
+    },
+    "presence_detected": {
+      "type": "bool",
+      "value": false
+    },
+    "presence_distance": {
+      "type": "int",
+      "value": 0
+    }
+  },
+  "presence_result_extra_type": "ProcessorExtraResult",
+  "presence_result_extra": {
+    "abs_mean_sweep": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "fast_lp_mean_sweep": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "frame": {
+      "type": "ndarray",
+      "shape": [
+        16,
+        4
+      ],
+      "dtype": "complex128"
+    },
+    "lp_noise": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    },
+    "presence_distance_index": {
+      "type": "int",
+      "value": 0
+    },
+    "slow_lp_mean_sweep": {
+      "type": "ndarray",
+      "shape": [
+        4
+      ],
+      "dtype": "float64"
+    }
+  }
+}
