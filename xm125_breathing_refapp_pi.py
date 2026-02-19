@@ -120,6 +120,10 @@ def main():
     sensor_id = args.sensor_id
 
     # ---------- 1) Breathing processor config ----------
+    # Parameter rationale:
+    # - 6..30 bpm matches typical adult resting-to-lightly-elevated breathing band.
+    # - 15 s history provides enough temporal context for PSD stability while keeping startup delay acceptable.
+    # Keep these stable while debugging pipeline/IO/state behavior; tune only after logging is verified.
     breathing_processor_config = BreathingProcessorConfig(
         lowest_breathing_rate=6,
         highest_breathing_rate=30,
@@ -127,6 +131,10 @@ def main():
     )
 
     # ---------- 2) Presence processor config ----------
+    # Parameter rationale:
+    # - Presence thresholds/time constants are tuned for near-field seated target detection.
+    # - Intra path catches faster motion; inter path catches slower drift.
+    # These values directly affect enter gating and distance lock behavior.
     presence_config = PresenceProcessorConfig(
         intra_detection_threshold=4,
         intra_frame_time_const=0.15,
@@ -136,6 +144,10 @@ def main():
     )
 
     # ---------- 3) RefApp config ----------
+    # Parameter rationale:
+    # - start_m/end_m define the analysis range where the subject is expected.
+    # - num_distances_to_analyze + distance_determination_duration control distance lock stability vs agility.
+    # - PROFILE_5 + sweeps_per_frame=16 is a conservative choice for signal quality in this setup.
     ref_app_config = RefAppConfig(
         use_presence_processor=True,
         start_m=0.4,
@@ -179,6 +191,7 @@ def main():
 
     last_print_t = 0.0
     frame_idx = 0
+    prev_unix_time: Optional[float] = None
 
     radar_enter_time: Optional[float] = None
     enter_streak = 0
@@ -198,6 +211,19 @@ def main():
 
             with open(csv_file, "w", newline="") as csvfile:
                 csv_writer = csv.writer(csvfile)
+                # CSV design note:
+                # - First 12 columns are base operational outputs (timing, app state, basic breathing/presence).
+                # - Remaining columns are compact diagnostics (no arrays) for offline root-cause analysis:
+                #   presence curve strength, signal/noise proxies, frame integrity, PSD evidence, motion/history.
+                # This is intended to separate:
+                #   (a) pipeline/state issues from (b) true sensing uncertainty.
+                # Semantic-overlap notes (intentional, not duplicates):
+                # - Timestamp / Unix_Time / Timestamp_Unix_ms:
+                #   relative seconds, absolute seconds, and absolute milliseconds for multi-device alignment.
+                # - Quality_Flag vs Breath_Valid:
+                #   Quality_Flag is categorical state; Breath_Valid is strict boolean for easy filtering.
+                # - Motion_RMS / Motion_P2P / Resp_Waveform_Value:
+                #   aggregate amplitude proxies plus one instantaneous waveform sample.
                 csv_writer.writerow([
                     "Timestamp",
                     "Unix_Time",
@@ -211,9 +237,11 @@ def main():
                     "Inter_Presence_Score",
                     "Presence_Distance_Index",
                     "Radar_Enter_Time",
+                    # Presence curve scalar evidence
                     "Intra_Max_All",
                     "Inter_Max_All",
                     "Intra_Over_Inter_Max",
+                    # Signal/noise proxy columns from presence extra_result
                     "Signal_Peak_Bin",
                     "Signal_Peak_Value",
                     "Noise_Median",
@@ -221,12 +249,15 @@ def main():
                     "Signal_At_PresenceBin",
                     "Noise_At_PresenceBin",
                     "PresenceBin_To_Noise",
+                    # Fast-vs-slow LP dynamics
                     "FastSlow_Diff_Max",
                     "FastSlow_Diff_AtPresenceBin",
+                    # Acquisition integrity from complex frame energy
                     "Frame_Energy",
                     "Sweep_Energy_STD",
                     "Sweep_Energy_P2P",
                     "Bin_Energy_STD",
+                    # Breathing PSD and motion evidence
                     "PSD_Peak_Idx",
                     "PSD_Peak_Freq_Hz",
                     "PSD_Peak_BPM",
@@ -238,8 +269,16 @@ def main():
                     "Rate_Hist_Last",
                     "Rate_Hist_Valid_Frac_10s",
                     "Buffer_Coverage_s",
+                    # Parsed index bounds for distances_being_analyzed tuple
                     "DBA_Start_Idx",
                     "DBA_End_Idx",
+                    # Minimal high-value additions (no arrays, directly available)
+                    "Timestamp_Unix_ms",
+                    "Frame_Idx",
+                    "Breath_Valid",
+                    "Inter_Frame_Dt_ms",
+                    "Sweeps_Per_Frame",
+                    "Resp_Waveform_Value",
                 ])
 
                 while not interrupt_handler.got_signal:
@@ -289,6 +328,7 @@ def main():
 
                     motion_rms: Any = ""
                     motion_p2p: Any = ""
+                    resp_waveform_value: Any = ""
                     rate_hist_last: Any = ""
                     rate_hist_valid_frac_10s: Any = ""
                     buffer_coverage_s: Any = ""
@@ -297,6 +337,8 @@ def main():
                     dba_end_idx: Any = ""
 
                     # ----- Presence -----
+                    # Presence fields are logged even before breathing is available.
+                    # This helps diagnose whether failures come from "no presence lock" vs breathing stage.
                     if presence_res is not None:
                         presence_detected = _safe_bool(getattr(presence_res, "presence_detected", None))
                         presence_distance = _safe_float(getattr(presence_res, "presence_distance", None))
@@ -307,7 +349,8 @@ def main():
                         if presence_extra is not None:
                             presence_distance_index = getattr(presence_extra, "presence_distance_index", "")
 
-                        # Enter marking with anti-jitter streak
+                        # Enter marking with anti-jitter streak:
+                        # radar_enter_time is latched once and used as a session alignment anchor.
                         in_range = (
                             presence_detected is True
                             and isinstance(presence_distance, (int, float))
@@ -413,7 +456,8 @@ def main():
                             except Exception:
                                 pass
 
-                    # Distances_Being_Analyzed tuple parsing
+                    # Distances_Being_Analyzed tuple parsing:
+                    # Keep original string column and append parsed bounds for easier downstream slicing.
                     dba = getattr(processed_data, "distances_being_analyzed", None)
                     if isinstance(dba, tuple) and len(dba) == 2:
                         try:
@@ -424,6 +468,7 @@ def main():
                             dba_end_idx = ""
 
                     # ----- Breathing -----
+                    # breathing_rate can be None during warm-up. Keep blanks instead of forcing zeros.
                     if breathing_res is not None:
                         br = getattr(breathing_res, "breathing_rate", None)
                         if br is not None:
@@ -447,6 +492,7 @@ def main():
 
                             if psd is not None and frequencies is not None and psd.size == frequencies.size:
                                 try:
+                                    # PSD peak summary: compact evidence of dominant respiratory frequency.
                                     psd_peak_idx = int(np.argmax(psd))
                                     psd_peak_freq_hz = float(frequencies[psd_peak_idx])
                                     psd_peak_bpm = float(psd_peak_freq_hz * 60.0)
@@ -457,6 +503,7 @@ def main():
                                         top2_vals = np.sort(psd[top2_idx])[::-1]
                                         psd_peak_ratio_1_2 = float(top2_vals[0] / (top2_vals[1] + EPS))
 
+                                    # Bandpower in 6..30 bpm (0.1..0.5 Hz), consistent with configured search band.
                                     band_mask = (frequencies >= (6.0 / 60.0)) & (frequencies <= (30.0 / 60.0))
                                     if np.any(band_mask):
                                         bandpower_6_30_bpm = float(np.sum(psd[band_mask]))
@@ -468,6 +515,8 @@ def main():
                                 try:
                                     motion_rms = float(np.sqrt(np.mean(breathing_motion**2)))
                                     motion_p2p = float(np.max(breathing_motion) - np.min(breathing_motion))
+                                    # Current waveform sample proxy: use latest available point in breathing_motion buffer.
+                                    resp_waveform_value = float(breathing_motion[-1])
                                 except Exception:
                                     pass
 
@@ -489,6 +538,8 @@ def main():
                                 and time_vector.size > 0
                             ):
                                 try:
+                                    # Fraction of finite rate history in latest 10 s:
+                                    # quick proxy for tracking continuity.
                                     t_last = float(time_vector[-1])
                                     mask = (t_last - time_vector) <= 10.0
                                     n = int(np.sum(mask))
@@ -516,6 +567,20 @@ def main():
                             print(f"{current_time:.2f}s\tNo presence")
 
                     radar_enter_time_val: Any = radar_enter_time if radar_enter_time is not None else ""
+                    # New lightweight timing/validity fields:
+                    # - unix ms timestamp for easier join with other devices
+                    # - per-frame dt in ms for sampling-jitter diagnostics
+                    # - explicit breathing-valid boolean to avoid inferring from blanks
+                    # - these complement existing fields and are intentionally non-redundant in meaning
+                    timestamp_unix_ms = int(unix_time * 1000.0)
+                    inter_frame_dt_ms: Any = ""
+                    if prev_unix_time is not None:
+                        try:
+                            inter_frame_dt_ms = float((unix_time - prev_unix_time) * 1000.0)
+                        except Exception:
+                            inter_frame_dt_ms = ""
+                    prev_unix_time = unix_time
+                    breath_valid = isinstance(breath_rate_bpm, (int, float))
 
                     row = [
                         current_time,
@@ -559,6 +624,12 @@ def main():
                         buffer_coverage_s,
                         dba_start_idx,
                         dba_end_idx,
+                        timestamp_unix_ms,
+                        frame_idx,
+                        breath_valid,
+                        inter_frame_dt_ms,
+                        ref_app_config.sweeps_per_frame,
+                        resp_waveform_value,
                     ]
                     csv_writer.writerow(row)
                     frame_idx += 1
